@@ -18,15 +18,26 @@ type Configuration struct {
 	LogLevel    string
 	BroadcastIP string
 	Commands    []CommandConfiguration // the various defined commands. Will be enhanded with default operation if empty from configuration
+	Auth		AuthConfiguration  // optional
+	HTTPOutput  string
 
 	listenersConfiguration []ListenerConfiguration // converted once parsed from Listeners
 }
 
+type AuthConfiguration struct {
+	Login 		string `json:"Login"`
+	Password	string `json:"password"`
+}
+
+func (a AuthConfiguration) isEmpty() bool {
+    return a.Login == "" && a.Password == ""
+}
+
 type CommandConfiguration struct {
-	Operation   string `json:"Operation"`
-	Command     string `json:"Command"`
-	IsDefault   bool   `json:"Default"`
-	CommandType string `json:"Type"`
+	Operation    string `json:"Operation"`
+	Command      string `json:"Command"`
+	IsDefault    bool   `json:"Default"`
+	CommandType  string `json:"Type"`
 }
 
 type ListenerConfiguration struct {
@@ -39,6 +50,7 @@ func (conf *Configuration) InitDefaultConfiguration() {
 	conf.Listeners = []string{"UDP:9", "HTTP:8009"}
 	conf.LogLevel = "INFO"
 	conf.BroadcastIP = "192.168.255.255"
+	conf.HTTPOutput = "XML"
 	// default commands are registered on Parse() method, depending on the current operating system
 }
 
@@ -111,5 +123,4 @@ func (conf *Configuration) Parse() {
 			command.CommandType = COMMAND_TYPE_EXTERNAL
 		}
 	}
-
 }

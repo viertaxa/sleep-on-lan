@@ -5,33 +5,38 @@ import (
 	"net/http"
 	"sort"
 	"strconv"
+	"time"
 	// "encoding/json"
 	// "io/ioutil"
 	"os"
+	"strings"
 
 	"github.com/labstack/echo"
-	// "github.com/labstack/echo/middleware"
+	"github.com/labstack/echo/middleware"
 	// "github.com/labstack/echo/engine/standard"
+
+	"github.com/sparrc/go-ping" // for ping
+	// "github.com/mdlayher/arp" // for mac > ip conversion
 )
 
 type RestResultHost struct {
-	XMLName    xml.Name `xml:"host"`
+	XMLName    xml.Name `xml:"host" json:"-"`
 	Ip         string   `xml:"ip,attr"`
 	MacAddress string   `xml:"mac,attr"`
 }
 
 type RestResultHosts struct {
-	XMLName xml.Name `xml:"hosts"`
+	XMLName xml.Name `xml:"hosts" json:"-"`
 	Hosts   []RestResultHost
 }
 
 type RestResultCommands struct {
-	XMLName  xml.Name `xml:"commands"`
+	XMLName  xml.Name `xml:"commands" json:"-"`
 	Commands []RestResultCommandConfiguration
 }
 
 type RestResultCommandConfiguration struct {
-	XMLName   xml.Name `xml:"command"`
+	XMLName   xml.Name `xml:"command" json:"-"`
 	Operation string   `xml:"operation,attr"`
 	Command   string   `xml:"command,attr"`
 	IsDefault bool     `xml:"default,attr"`
@@ -39,19 +44,19 @@ type RestResultCommandConfiguration struct {
 }
 
 type RestResultListeners struct {
-	XMLName   xml.Name `xml:"listeners"`
+	XMLName   xml.Name `xml:"listeners" json:"-"`
 	Listeners []RestResultListenerConfiguration
 }
 
 type RestResultListenerConfiguration struct {
-	XMLName xml.Name `xml:"listener"`
+	XMLName xml.Name `xml:"listener" json:"-"`
 	Type    string   `xml:"type,attr"`
 	Port    int      `xml:"port,attr"`
 	Active  bool     `xml:"active,attr"`
 }
 
 type RestResult struct {
-	XMLName              xml.Name `xml:"result"`
+	XMLName              xml.Name `xml:"result" json:"-"`
 	Application          string   `xml:"application"`
 	Version              string   `xml:"version"`
 	CompilationTimestamp string   `xml:"compilation"`
@@ -61,16 +66,65 @@ type RestResult struct {
 }
 
 type RestOperationResult struct {
-	XMLName              xml.Name `xml:"result"`
+	XMLName              xml.Name `xml:"result" json:"-"`
 	Operation            string   `xml:"operation"`
 	Result				 bool     `xml:"successful"`
+}
+
+const (
+	HOST_STATE_ONLINE = "online"
+	HOST_STATE_OFFLINE = "offline"
+	HOST_STATE_UNKNOWN = "unknown"	
+)
+
+type RestStateResult struct {
+	XMLName              xml.Name `xml:"result" json:"-"`
+	State				 string	  `xml:"state"`
+	Host    			 string   `xml:"host"`
 }
 
 func dumpRoute(route string) {
 	Info.Println("Registering route [/" + route + "]")
 }
 
-func ListenHTTP(port int, commands []CommandConfiguration) {
+// func retrieveIpFromMac(mac strinc) string {
+  // requires defined interface ...
+// }
+
+func renderResult(c echo.Context, status int, result interface{}) error {
+	format := c.QueryParam("format")
+	if strings.EqualFold(configuration.HTTPOutput, "JSON") || strings.EqualFold(format, "JSON") {
+		return c.JSONPretty(status, result, "  ")
+	} else {
+		return c.XMLPretty(status, result, "  ")
+	}
+}
+
+func pingIp(ip string) *RestStateResult {
+	Info.Println("Checking state of remote host with IP [" + ip + "]")
+	result := &RestStateResult{
+		Host:  ip,
+		State: HOST_STATE_ONLINE,
+	}
+	pinger, err := ping.NewPinger(ip)
+	if err != nil {
+		Info.Println("Can't retrieve PING results (rights problems when executing sol, maybe ?)", err)
+		result.State = HOST_STATE_UNKNOWN
+	}
+	pinger.Count = 3
+	// pinger.Interval = // default is 1s, which is fine
+	pinger.Timeout = time.Second * 5
+	pinger.SetPrivileged(true)
+	pinger.Run() // blocks until finished
+	stats := pinger.Statistics() // get send/receive/rtt stats		
+	Info.Println("Ping results for [" + stats.Addr + "], [" + strconv.Itoa(stats.PacketsSent) + "] packets transmitted, [" + strconv.Itoa(stats.PacketsRecv) + "] packets received, [" + strconv.FormatFloat(stats.PacketLoss, 'f', 2, 64) + "] packet loss") // , round-trip min/avg/max/stddev = " + stats.MinRtt + "/" + stats.AvgRtt + "/" + stats.MaxRtt + "/" + stats.StdDevRtt + "")
+	if (stats.PacketsRecv == 0) {
+		result.State = HOST_STATE_OFFLINE
+	}
+	return result
+}
+
+func ListenHTTP(port int) {
 	// externalIp, _ := ExternalIP()
 	// baseExternalUrl := "http://" + externalIp + ":" + strconv.Itoa(port)
 	// Info.Println("Now listening HTTP on port [" + strconv.Itoa(port) + "], urls will be : ")
@@ -86,6 +140,18 @@ func ListenHTTP(port int, commands []CommandConfiguration) {
 	// e.File("/", "public/index.html")
 	// e.Static("/", "public")
 	// e.Use(middleware.Gzip())
+
+	if configuration.Auth.isEmpty() {
+		Info.Println("HTTP starting on port [" + strconv.Itoa(port) + "], without auth")
+	} else {
+		Info.Println("HTTP starting on port [" + strconv.Itoa(port) + "], with auth activated : login [" + configuration.Auth.Login + "], password [" + strings.Repeat("*", len(configuration.Auth.Password)) + "]")
+		e.Use(middleware.BasicAuth(func(username, password string, c echo.Context) (bool, error) {
+			if username == configuration.Auth.Login && password == configuration.Auth.Password {
+				return true, nil
+			}
+			return false, nil
+		}))
+	}
 
 	dumpRoute("")
 	e.GET("/", func(c echo.Context) error {
@@ -116,25 +182,30 @@ func ListenHTTP(port int, commands []CommandConfiguration) {
 			result.Commands.Commands = append(result.Commands.Commands, RestResultCommandConfiguration{Type: commandConfiguration.CommandType, Operation: commandConfiguration.Operation, Command: commandConfiguration.Command, IsDefault: commandConfiguration.IsDefault})
 		}
 	
-		return c.XMLPretty(http.StatusOK, result, "  ")
+		return renderResult(c, http.StatusOK, result)
 	})
 
 	// N.B.: sleep operation is now registred through commands below
-	for _, command := range commands {
+	for _, command := range configuration.Commands {
 		dumpRoute(command.Operation)
 		e.GET("/" + command.Operation, func(c echo.Context) error {
+			
+			items := strings.Split(c.Request().URL.Path, "/")
+			operation := items[1]
+
 			result := &RestOperationResult{
-				Operation:  command.Operation,
+				Operation:  operation,
 				Result: true,
 			}
-			for _, availableCommand := range configuration.Commands {
-				if availableCommand.Operation == command.Operation {
-					Info.Println("Executing [" + command.Operation + "]")
+			for idx, _ := range configuration.Commands {
+				availableCommand := configuration.Commands[idx]
+				if availableCommand.Operation == operation {
+					Info.Println("Executing [" + operation + "]")
 					ExecuteCommand(availableCommand)
 					break
 				}
-		}			
-		return c.XMLPretty(http.StatusOK, result, "  ")
+			}			
+			return renderResult(c, http.StatusOK, result)
 		})
 	}
 
@@ -155,6 +226,37 @@ func ListenHTTP(port int, commands []CommandConfiguration) {
 		// return c.XMLPretty(http.StatusOK, result, "  ")
 	})
 
+	dumpRoute("state/local/online")
+	e.GET("/state/local/online", func(c echo.Context) error {
+		return c.String(http.StatusOK, "true")
+	})
+	
+	dumpRoute("state/local")
+	e.GET("/state/local", func(c echo.Context) error {
+		result := &RestStateResult{
+			Host:  "localhost",
+			State: HOST_STATE_ONLINE,
+		}
+		return renderResult(c, http.StatusOK, result)
+	})
+	
+	dumpRoute("state/ip/:ip")
+	e.GET("/state/ip/:ip", func(c echo.Context) error {
+		ip := c.Param("ip")
+		result := pingIp(ip)
+		return renderResult(c, http.StatusOK, result)
+	})
+
+	/*
+	dumpRoute("state/mac/:mac")
+	e.GET("/state/ip/:ip", func(c echo.Context) error {
+		mac := c.Param("mac")
+		ip := retrieveIpFromMac(mac)
+		result := pingIp(ip)
+		return c.XMLPretty(http.StatusOK, result, "  ")
+	})
+	*/
+		
 	dumpRoute("wol/:mac")
 	e.GET("/wol/:mac", func(c echo.Context) error {
 		result := &RestOperationResult{
@@ -170,7 +272,7 @@ func ListenHTTP(port int, commands []CommandConfiguration) {
 		} else {
 			magicPacket.Wake(configuration.BroadcastIP)
 		}
-		return c.XMLPretty(http.StatusOK, result, "  ")
+		return renderResult(c, http.StatusOK, result)
 	})
 	
 	// localIp := "0.0.0.0"

@@ -64,6 +64,25 @@ If no configuration file is provided, UDP:9 and HTTP:8009 are assumed by default
 
 The REST services are exposed on 0.0.0.0 and are thus accessibles from http://localhost/, http://127.0.0.1/, http://192.168.1.x/ and so on.
 
+Rest service may be secured if needed through an optional `Auth` configuration (a `Basic Auth` is triggered on all REST services as soon as this `Auth` section is defined) : 
+
+<pre>{
+  "Listeners" : ["UDP:9", "HTTP:8009" ],
+  "Auth" : {
+      "Login" : "myusername",
+      "Password" : "mypassword"
+  }
+}
+</pre>
+
+Authed REST may still be triggered from a remote host, if needed, through : 
+
+```
+curl http://myusername:mypassword@<IP>/sleep/
+```
+
+Default output from REST command is `XML` but may be switched from a configuration point of view (by adding a `HTTPOutput : 'JSON'`) or on a per-request basis (by adding a `?format=JSON` to the request, one would retrieve a JSON result).
+
 **LogLevel** defines the log level to use. Available values are NONE|OFF, DEBUG, INFO, WARN|WARNING, ERROR. Logs are just written to the stderr/stdout outputs.
 
 **BroadcastIP** defines the broadcast IP used by the /wol service. By default the IP used is 192.168.255.255 (local network range).
